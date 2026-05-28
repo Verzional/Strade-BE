@@ -1,0 +1,14 @@
+{
+  "routes": [
+    {
+      "path": "/api/v1/reviews",
+      "target_url": "http://review:3001",
+      "require_auth": true
+    },
+    {
+      "path": "/api/v1/public-reviews",
+      "target_url": "http://review:3001",
+      "require_auth": false
+    }
+  ]
+}
