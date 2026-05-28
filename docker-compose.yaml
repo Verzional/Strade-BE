@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 x-common-variables: &common-env
   ENV: development
@@ -16,7 +16,7 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: core_db
     ports:
-      - "5432:5432" 
+      - "5432:5432"
     volumes:
       - ./db/core:/docker-entrypoint-initdb.d
       - pg_core_data:/var/lib/postgresql/data
@@ -42,7 +42,7 @@ services:
       - microservices-network
 
   # ==========================================
-  # 3. MONGODB 
+  # 3. MONGODB
   # ==========================================
   mongodb-chat:
     image: mongo:6.0
@@ -99,9 +99,8 @@ services:
       - "3001:3001"
     volumes:
       - ./services/review:/app
-      - /app/node_modules
     environment:
-      <<: *common-env
+      ENV: development
       PORT: 3001
       DB_URI: postgres://admin:password@postgres-core:5432/core_db
     depends_on:
