@@ -76,7 +76,9 @@ services:
       - microservices-network
 
   user:
-    build: ./services/user
+    build: 
+      context: ./services/user
+      dockerfile: Dockerfile
     container_name: service-user
     ports:
       - "3000:3000"
@@ -87,6 +89,9 @@ services:
       <<: *common-env
       PORT: 3000
       DB_URI: postgres://admin:password@postgres-core:5432/core_db
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      CLIENT_URL: ${CLIENT_URL}
     depends_on:
       - postgres-core
     networks:
