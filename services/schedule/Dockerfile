@@ -9,7 +9,8 @@ RUN uv sync --no-dev
 
 COPY . .
 
-# Assuming Schedule service runs on 3002
-EXPOSE 3002
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3002"]
+EXPOSE 8000
+
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
