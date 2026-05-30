@@ -1,11 +1,24 @@
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+
 from fastapi import FastAPI
 
-app = FastAPI()
+from app.database import Base, engine
+from app.routes.reviews import router as reviews_router
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello from FastAPI managed by uv!"}
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: str = None):
-    return {"item_id": item_id, "q": q}
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(title="Review Service", lifespan=lifespan)
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+app.include_router(reviews_router)
