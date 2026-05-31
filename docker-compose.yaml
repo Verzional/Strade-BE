@@ -70,7 +70,7 @@ services:
       - ./services/gateway:/app
     environment:
       <<: *common-env
-      USER_SERVICE_URL: http://user:3000
+      USER_SERVICE_URL: http://user:2000
       CHAT_SERVICE_URL: http://chat:8081
     networks:
       - microservices-network
@@ -81,13 +81,13 @@ services:
       dockerfile: Dockerfile
     container_name: service-user
     ports:
-      - "3000:3000"
+      - "2000:2000"
     volumes:
       - ./services/user:/app
       - /app/node_modules
     environment:
       <<: *common-env
-      PORT: 3000
+      PORT: 2000
       DB_URI: postgres://admin:password@postgres-core:5432/core_db
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}

@@ -35,7 +35,7 @@ RUN npm install --omit=dev
 COPY --from=builder /usr/src/app/dist ./dist
 
 # Expose the port matching your docker-compose config
-EXPOSE 3000
+EXPOSE 2000
 
 # Start the Node app
 CMD ["npm", "start"]

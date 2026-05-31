@@ -2,12 +2,12 @@
   "routes": [
     {
       "path": "/api/auth",
-      "target_url": "http://user:3000",
+      "target_url": "http://user:2000",
       "require_auth": false
     },
     {
       "path": "/api/users",
-      "target_url": "http://user:3000",
+      "target_url": "http://user:2000",
       "require_auth": true
     }
   ]
