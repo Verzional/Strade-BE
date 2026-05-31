@@ -157,8 +157,10 @@ services:
     environment:
       <<: *common-env
       MONGO_URI: mongodb://admin:password@mongodb-chat:27017/chat_db?authSource=admin
+      DB_URI: postgres://admin:password@postgres-core:5432/core_db
     depends_on:
       - mongodb-chat
+      - postgres-core
     networks:
       - microservices-network
 
