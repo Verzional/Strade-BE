@@ -100,12 +100,13 @@ services:
   review:
     build: ./services/review
     container_name: service-review
+    command: python -B -m uvicorn main:app --host 0.0.0.0 --port 3001
     ports:
       - "3001:3001"
     volumes:
       - ./services/review:/app
     environment:
-      ENV: development
+      <<: *common-env
       PORT: 3001
       DB_URI: postgres://admin:password@postgres-core:5432/core_db
     depends_on:
