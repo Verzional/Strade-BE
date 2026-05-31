@@ -3,6 +3,11 @@
     {
       "path": "/api/skills",
       "target_url": "http://skill:3002",
+      "require_auth": false
+    },
+    {
+      "path": "/api/skills/match",
+      "target_url": "http://skill:3002",
       "require_auth": true
     }
   ]
