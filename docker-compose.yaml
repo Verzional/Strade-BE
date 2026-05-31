@@ -2,7 +2,7 @@ version: "3.8"
 
 x-common-variables: &common-env
   ENV: development
-  JWT_SECRET: super_secret_key_change_me_in_prod
+  JWT_SECRET: ${JWT_SECRET}
 
 services:
   # ==========================================
@@ -114,22 +114,22 @@ services:
     networks:
       - microservices-network
 
-  skill:
-    build: ./services/skill
-    container_name: service-skill
-    ports:
-      - "3002:3002"
-    volumes:
-      - ./services/skill:/app
-      - /app/node_modules
-    environment:
-      <<: *common-env
-      PORT: 3002
-      DB_URI: postgres://admin:password@postgres-core:5432/core_db
-    depends_on:
-      - postgres-core
-    networks:
-      - microservices-network
+  # skill:
+  #   build: ./services/skill
+  #   container_name: service-skill
+  #   ports:
+  #     - "3002:3002"
+  #   volumes:
+  #     - ./services/skill:/app
+  #     - /app/node_modules
+  #   environment:
+  #     <<: *common-env
+  #     PORT: 3002
+  #     DB_URI: postgres://admin:password@postgres-core:5432/core_db
+  #   depends_on:
+  #     - postgres-core
+  #   networks:
+  #     - microservices-network
 
   schedule:
     build: ./services/schedule
@@ -147,20 +147,20 @@ services:
     networks:
       - microservices-network
 
-  chat:
-    build: ./services/chat
-    container_name: service-chat
-    ports:
-      - "8081:8081"
-    volumes:
-      - ./services/chat:/app
-    environment:
-      <<: *common-env
-      MONGO_URI: mongodb://admin:password@mongodb-chat:27017/chat_db?authSource=admin
-    depends_on:
-      - mongodb-chat
-    networks:
-      - microservices-network
+  # chat:
+  #   build: ./services/chat
+  #   container_name: service-chat
+  #   ports:
+  #     - "8081:8081"
+  #   volumes:
+  #     - ./services/chat:/app
+  #   environment:
+  #     <<: *common-env
+  #     MONGO_URI: mongodb://admin:password@mongodb-chat:27017/chat_db?authSource=admin
+  #   depends_on:
+  #     - mongodb-chat
+  #   networks:
+  #     - microservices-network
 
 # Infrastructure Definitions
 networks:

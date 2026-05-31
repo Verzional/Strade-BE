@@ -9,11 +9,6 @@
       "path": "/api/users",
       "target_url": "http://user:3000",
       "require_auth": true
-    },
-    {
-      "path": "/api/users/password",
-      "target_url": "http://user:3000",
-      "require_auth": true
     }
   ]
 }

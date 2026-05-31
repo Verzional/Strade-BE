@@ -8,7 +8,7 @@ from app.models.schedule import Schedule
 from app.schemas.schedule import ScheduleCreate, ScheduleResponse
 from app.services import user_client
 
-router = APIRouter(tags=["schedules"])
+router = APIRouter(prefix="/api", tags=["schedules"])
 
 @router.post("/schedules", response_model=ScheduleResponse)
 async def create_schedule(

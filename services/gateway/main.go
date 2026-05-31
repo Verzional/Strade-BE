@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Route defines the configuration schema for an endpoint
@@ -100,6 +102,15 @@ func gatewayHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		isValid, err := validateToken(tokenString)
+		
+		if err != nil || !isValid {
+			log.Printf("Blocked invalid token attempt: %v", err)
+			http.Error(w, "Gateway Error: Unauthorized (Invalid or Expired Token)", http.StatusUnauthorized)
+			return
+		}
+
 		// Optional: Parse/Validate JWT token here or forward to User Service token validator
 		// tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		// userId, err := validateToken(tokenString)
@@ -122,4 +133,27 @@ func gatewayHandler(w http.ResponseWriter, r *http.Request) {
 	r.Host = target.Host
 
 	proxy.ServeHTTP(w, r)
+}
+
+func validateToken(tokenString string) (bool, error) {
+	// Get the secret key from environment variables
+	secretKey := os.Getenv("JWT_SECRET") 
+	if secretKey == "" {
+		return false, fmt.Errorf("JWT_SECRET environment variable is missing in Gateway")
+	}
+
+	// Parse and validate the token
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Ensure the signing method is exactly what we expect (HMAC)
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(secretKey), nil
+	})
+
+	if err != nil {
+		return false, err
+	}
+
+	return token.Valid, nil
 }

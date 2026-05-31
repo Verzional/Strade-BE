@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.review import Review
 from app.schemas.review import ReviewWithUsers
 
-router = APIRouter(tags=["reviews"])
+router = APIRouter(prefix="/api", tags=["reviews"])
 
 
 def _valid_user_ids(user_ids: set[str]) -> tuple[list[str], list[str]]:
