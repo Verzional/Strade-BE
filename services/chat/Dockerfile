@@ -14,6 +14,7 @@ WORKDIR /app
 
 COPY --from=builder /app/chat-binary .
 
-EXPOSE 8080
+EXPOSE 8081
 
 CMD ["./chat-binary"]
+# CMD ["go", "run", "main.go"]
