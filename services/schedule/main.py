@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
-
+from fastapi.middleware.cors import CORSMiddleware
 from app.database import Base, engine
 from app.routes.schedules import router as schedules_router
 
