@@ -1,19 +1,22 @@
 import os
 from typing import Any
-
 import httpx
 
-
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://gateway:8080").rstrip("/")
+# Matches the Node.js route we built for the Schedule service
 USER_DETAIL_PATH_TEMPLATE = os.getenv(
     "USER_DETAIL_PATH_TEMPLATE",
-    "/api/v1/users/{user_id}",
+    "/api/users/{user_id}",
 )
 
-
 class UserGatewayClient:
-    def __init__(self) -> None:
-        self._client = httpx.AsyncClient(base_url=GATEWAY_URL, timeout=3.0)
+    # 1. Accept the auth_token parameter
+    def __init__(self, auth_token: str | None = None) -> None:
+        headers = {}
+        if auth_token:
+            headers["Authorization"] = auth_token
+            
+        self._client = httpx.AsyncClient(base_url=GATEWAY_URL, headers=headers, timeout=5.0)
 
     async def close(self) -> None:
         await self._client.aclose()

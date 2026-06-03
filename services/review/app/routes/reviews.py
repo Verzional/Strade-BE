@@ -1,13 +1,15 @@
+import asyncio
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import bindparam, select, text
+from fastapi import APIRouter, Depends, Query, Header
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.review import Review
 from app.schemas.review import ReviewWithUsers
+from app.services.user_client import UserGatewayClient
 
 router = APIRouter(prefix="/api", tags=["reviews"])
 
@@ -23,37 +25,38 @@ def _valid_user_ids(user_ids: set[str]) -> tuple[list[str], list[str]]:
     return valid_ids, invalid_ids
 
 
-def _fetch_users(db: Session, user_ids: set[str]) -> dict[str, dict[str, object]]:
-    valid_ids, _ = _valid_user_ids(user_ids)
+async def _fetch_users_via_gateway(
+    user_ids: set[str], 
+    auth_token: str | None = None
+) -> tuple[dict[str, dict], list[str]]:
+    valid_ids, invalid_ids = _valid_user_ids(user_ids)
     if not valid_ids:
-        return {}
+        return {}, invalid_ids
 
-    statement = text(
-        """
-        SELECT
-            id::text AS id,
-            name,
-            email,
-            image,
-            "emailVerified",
-            "createdAt",
-            "updatedAt"
-        FROM users
-        WHERE id IN :user_ids
-        """
-    ).bindparams(bindparam("user_ids", expanding=True))
+    client = UserGatewayClient(auth_token=auth_token)
+    users_map = {}
+    
+    async def fetch_and_map(uid: str):
+        user_data, _ = await client.fetch_user(uid)
+        if user_data:
+            users_map[uid] = user_data
 
-    rows = db.execute(statement, {"user_ids": valid_ids}).mappings().all()
-    return {str(row["id"]): dict(row) for row in rows}
+    try:
+        await asyncio.gather(*(fetch_and_map(uid) for uid in valid_ids))
+    finally:
+        await client.close()
+
+    return users_map, invalid_ids
 
 
-def _attach_users(
+async def _attach_users(
     db: Session,
     reviews: list[Review],
+    auth_token: str | None = None
 ) -> list[ReviewWithUsers]:
     user_ids = {review.authorId for review in reviews} | {review.receiverId for review in reviews}
-    users = _fetch_users(db, {user_id for user_id in user_ids if user_id})
-    _, invalid_ids = _valid_user_ids(user_ids)
+    
+    users, invalid_ids = await _fetch_users_via_gateway({uid for uid in user_ids if uid}, auth_token)
 
     enriched_reviews: list[ReviewWithUsers] = []
     for review in reviews:
@@ -64,7 +67,7 @@ def _attach_users(
             if user_id in invalid_ids:
                 errors.append(f"user {user_id}: invalid UUID")
             elif user is None:
-                errors.append(f"user {user_id}: not found")
+                errors.append(f"user {user_id}: not found via gateway")
 
         enriched_reviews.append(
             ReviewWithUsers.model_validate(review).model_copy(
@@ -85,12 +88,15 @@ def _attach_users(
 async def fetch_reviews(
     db: Annotated[Session, Depends(get_db)],
     receiverId: Annotated[str | None, Query(description="Filter by review receiver ID")] = None,
+    authorization: Annotated[str | None, Header()] = None  # Extract JWT token!
 ) -> list[ReviewWithUsers]:
     statement = select(Review).order_by(Review.createdAt.desc())
     if receiverId:
         statement = statement.where(Review.receiverId == receiverId)
     reviews = list(db.scalars(statement).all())
-    return _attach_users(db, reviews)
+    
+    # Await the new async attach function
+    return await _attach_users(db, reviews, authorization)
 
 
 @router.get("/reviews/receiver/{receiver_id}", response_model=list[ReviewWithUsers])
@@ -99,6 +105,7 @@ async def fetch_reviews(
 async def list_reviews_by_receiver(
     receiver_id: str,
     db: Annotated[Session, Depends(get_db)],
+    authorization: Annotated[str | None, Header()] = None  # Extract JWT token!
 ) -> list[ReviewWithUsers]:
     statement = (
         select(Review)
@@ -106,4 +113,6 @@ async def list_reviews_by_receiver(
         .order_by(Review.createdAt.desc())
     )
     reviews = list(db.scalars(statement).all())
-    return _attach_users(db, reviews)
+    
+    # Await the new async attach function
+    return await _attach_users(db, reviews, authorization)
