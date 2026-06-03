@@ -32,7 +32,7 @@ const seed = async () => {
   // 2. Seed Mock User Skills (For PoC)
   // Generating a fake valid UUID for a dummy user matching what a gateway might forward
 
-  const dummyUserId1 = "11111111-1111-1111-1111-111111111111";
+  const dummyUserId1 = "dbc435ac-352b-490c-9e41-8eacdf9f7fa0";
   const dummyUserId2 = "22222222-2222-2222-2222-222222222222";
 
   const tsSkill = savedSkills.find((s) => s.skillName === "TypeScript");
@@ -40,8 +40,8 @@ const seed = async () => {
   if (tsSkill) {
     const us1 = new UserSkill();
     us1.user_id = dummyUserId1;
-    us1.username = "Alice The Teacher";
-    us1.email = "alice@example.com";
+    us1.username = "Rex Kenny";
+    us1.email = "rex.p6b.jac@gmail.com";
     us1.image = "https://ui-avatars.com/api/?name=Alice";
     us1.skill_id = tsSkill.id;
     us1.is_teaching = true;
