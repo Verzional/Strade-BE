@@ -135,6 +135,13 @@ func gatewayHandler(w http.ResponseWriter, r *http.Request) {
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
+	proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
+		log.Printf("Microservice is down/unreachable (%s): %v", target.Host, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable) // HTTP 503
+		w.Write([]byte(`{"error": "Service Unavailable: The requested service is currently offline."}`))
+	}
+
 	// Update headers to fit the destination service network protocol
 	r.URL.Host = target.Host
 	r.URL.Scheme = target.Scheme

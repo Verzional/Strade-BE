@@ -1,5 +1,5 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,11 +13,12 @@ router = APIRouter(prefix="/api", tags=["schedules"])
 @router.post("/schedules", response_model=ScheduleResponse)
 async def create_schedule(
     schedule_in: ScheduleCreate, 
-    db: Annotated[Session, Depends(get_db)]
+    db: Annotated[Session, Depends(get_db)],
+    authorization: Annotated[str, Header()]
 ):
     # Gateway request to User Service
-    username1 = await user_client.fetch_user_data(schedule_in.userId1)
-    username2 = await user_client.fetch_user_data(schedule_in.userId2)
+    username1 = await user_client.fetch_user_data(schedule_in.userId1, authorization)
+    username2 = await user_client.fetch_user_data(schedule_in.userId2, authorization)
 
     db_schedule = Schedule(
         time_start=schedule_in.time_start,
@@ -39,6 +40,10 @@ async def create_schedule(
 async def get_all_schedules(db: Annotated[Session, Depends(get_db)]):
     statement = select(Schedule)
     schedules = db.scalars(statement).all()
+    
+    if not schedules:
+        raise HTTPException(status_code=404, detail="There are no schedules")
+    
     return list(schedules)
 
 @router.get("/schedules/user/{user_id}", response_model=list[ScheduleResponse])
@@ -50,4 +55,8 @@ async def get_user_schedules(
         (Schedule.userId1 == user_id) | (Schedule.userId2 == user_id)
     )
     schedules = db.scalars(statement).all()
+    
+    if not schedules:
+        raise HTTPException(status_code=404, detail="There are no schedules for this user")
+    
     return list(schedules)
