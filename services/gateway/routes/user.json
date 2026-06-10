@@ -1,0 +1,18 @@
+{
+  "routes": [
+    {
+      "path": "/api/auth",
+      "target_urls": [
+        "http://user:2000"
+      ],
+      "require_auth": false
+    },
+    {
+      "path": "/api/users",
+      "target_urls": [
+        "http://user:2000"
+      ],
+      "require_auth": true
+    }
+  ]
+}

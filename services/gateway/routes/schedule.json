@@ -1,0 +1,12 @@
+{
+  "routes": [
+    {
+      "path": "/api/schedules",
+      "target_urls": [
+        "http://schedule-1:8000",
+        "http://schedule-2:8000"
+      ],
+      "require_auth": true
+    }
+  ]
+}

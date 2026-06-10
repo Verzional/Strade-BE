@@ -1,0 +1,14 @@
+{
+  "routes": [
+    {
+      "path": "/api/v1/chat/history",
+      "target_urls": "http://chat:8081",
+      "require_auth": true
+    },
+    {
+      "path": "/ws",
+      "target_urls": "ws://chat:8081",
+      "require_auth": false
+    }
+  ]
+}

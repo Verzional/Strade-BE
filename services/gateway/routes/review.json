@@ -1,0 +1,12 @@
+{
+  "routes": [
+    {
+      "path": "/api/reviews",
+      "target_urls": [
+        "http://review-1:3001",
+        "http://review-2:3001"
+      ],
+      "require_auth": true
+    }
+  ]
+}
