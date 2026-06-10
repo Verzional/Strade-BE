@@ -20,9 +20,10 @@ import (
 )
 
 var (
-	mongoClient *mongo.Client
-	pgClient    *gorm.DB
-	chatColl    *mongo.Collection
+	mongoClient   *mongo.Client
+	pgClient      *gorm.DB
+	chatColl      *mongo.Collection
+	chatUsersColl *mongo.Collection // New collection to cache usernames
 )
 
 // User represents the existing PostgreSQL user schema (read-only)
@@ -36,6 +37,7 @@ type User struct {
 type Message struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	SenderID   string             `bson:"sender_id" json:"sender_id"`
+	SenderName string             `bson:"sender_name" json:"sender_name"` // Added to decouple from User DB
 	ReceiverID string             `bson:"receiver_id" json:"receiver_id"`
 	Content    string             `bson:"content" json:"content"`
 	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
@@ -48,9 +50,10 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
-	conn   *websocket.Conn
-	userID string
-	send   chan []byte
+	conn     *websocket.Conn
+	userID   string
+	userName string // Added to keep track of the user's name during the session
+	send     chan []byte
 }
 
 var (
@@ -75,7 +78,12 @@ func initDB() {
 		log.Fatal("MongoDB ping error: ", err)
 	}
 	mongoClient = client
-	chatColl = mongoClient.Database("chat_db").Collection("messages")
+	
+	// Initialize Collections
+	db := mongoClient.Database("chat_db")
+	chatColl = db.Collection("messages")
+	chatUsersColl = db.Collection("users") // Initialize user cache collection
+	
 	fmt.Println("Connected to MongoDB!")
 
 	// PostgreSQL
@@ -83,16 +91,20 @@ func initDB() {
 	if pgURI == "" {
 		pgURI = "postgres://admin:password@localhost:5432/core_db"
 	}
-	db, err := gorm.Open(postgres.Open(pgURI), &gorm.Config{})
+	pgDb, err := gorm.Open(postgres.Open(pgURI), &gorm.Config{})
 	if err != nil {
-		log.Fatal("PostgreSQL connection error: ", err)
+		log.Println("Warning: PostgreSQL connection error (Chat will rely on MongoDB cache): ", err)
+	} else {
+		pgClient = pgDb
+		fmt.Println("Connected to PostgreSQL!")
 	}
-	pgClient = db
-	fmt.Println("Connected to PostgreSQL!")
 }
 
 // REST: Get history between two users
 func historyHandler(w http.ResponseWriter, r *http.Request) {
+	// Add CORS headers for direct frontend access if not using Gateway for this
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	
 	senderID := r.URL.Query().Get("sender_id")
 	receiverID := r.URL.Query().Get("receiver_id")
 
@@ -130,6 +142,80 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(messages)
 }
 
+func contactsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		http.Error(w, "missing user_id", http.StatusBadRequest)
+		return
+	}
+
+	// Find all messages where the user is either the sender or receiver
+	filter := bson.M{
+		"$or": []bson.M{
+			bson.M{"sender_id": userID},
+			bson.M{"receiver_id": userID},
+		},
+	}
+
+	cursor, err := chatColl.Find(context.TODO(), filter)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer cursor.Close(context.TODO())
+
+	var messages []Message
+	if err = cursor.All(context.TODO(), &messages); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Extract unique partners
+	partnerMap := make(map[string]string) // Map ID to Name
+	for _, msg := range messages {
+		if msg.SenderID != userID {
+			partnerMap[msg.SenderID] = msg.SenderName
+		}
+		if msg.ReceiverID != userID {
+			// If they were only a receiver, we might not have their name in the message struct yet
+			if _, exists := partnerMap[msg.ReceiverID]; !exists {
+				partnerMap[msg.ReceiverID] = "" 
+			}
+		}
+	}
+
+	// Build the response array, resolving missing names via the cache
+	type Contact struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	var contacts []Contact
+
+	for pID, pName := range partnerMap {
+		if pName == "" {
+			var cachedUser struct {
+				Name string `bson:"name"`
+			}
+			err := chatUsersColl.FindOne(context.TODO(), bson.M{"_id": pID}).Decode(&cachedUser)
+			if err == nil {
+				pName = cachedUser.Name
+			} else {
+				pName = "Unknown User" // Fallback
+			}
+		}
+		contacts = append(contacts, Contact{ID: pID, Name: pName})
+	}
+
+	if contacts == nil {
+		contacts = []Contact{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(contacts)
+}
+
 // WebSocket handler
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
@@ -138,12 +224,36 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify user exists in PostgreSQL
+	var userName string
 	var user User
-	result := pgClient.Table("users").First(&user, "id = ?", userID)
-	if result.Error != nil {
-		http.Error(w, "User not found", http.StatusUnauthorized)
-		return
+
+	// 1. Try to verify user exists in PostgreSQL
+	if pgClient != nil {
+		result := pgClient.Table("users").First(&user, "id = ?", userID)
+		if result.Error == nil {
+			userName = user.Name
+
+			// UPSERT to MongoDB to cache the username
+			opts := options.Update().SetUpsert(true)
+			update := bson.M{"$set": bson.M{"name": userName}}
+			_, err := chatUsersColl.UpdateByID(context.TODO(), userID, update, opts)
+			if err != nil {
+				log.Println("MongoDB user cache update error:", err)
+			}
+		}
+	}
+
+	// 2. Fallback: If PG is down or user wasn't found, check MongoDB Cache
+	if userName == "" {
+		var cachedUser struct {
+			Name string `bson:"name"`
+		}
+		err := chatUsersColl.FindOne(context.TODO(), bson.M{"_id": userID}).Decode(&cachedUser)
+		if err != nil {
+			http.Error(w, "User not found in Core DB or Chat Cache", http.StatusUnauthorized)
+			return
+		}
+		userName = cachedUser.Name
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -153,9 +263,10 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn:   conn,
-		userID: userID,
-		send:   make(chan []byte, 256),
+		conn:     conn,
+		userID:   userID,
+		userName: userName, // Store the cached name in the client session
+		send:     make(chan []byte, 256),
 	}
 
 	clientsMux.Lock()
@@ -190,6 +301,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		err = json.Unmarshal(messagePayload, &msg)
 		if err == nil {
 			msg.SenderID = userID
+			msg.SenderName = client.userName // Attach the saved username directly to the payload
 			msg.CreatedAt = time.Now()
 			msg.ID = primitive.NewObjectID()
 
@@ -215,7 +327,9 @@ func main() {
 	initDB()
 
 	http.HandleFunc("/ws", wsHandler)
-	http.HandleFunc("/api/v1/chat/history", historyHandler) // Updated to follow standard structure
+	http.HandleFunc("/api/v1/chat/history", historyHandler)
+	http.HandleFunc("/api/v1/chat/contacts", contactsHandler)
+	
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Chat Service Running")
 	})
