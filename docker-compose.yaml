@@ -6,7 +6,7 @@ x-common-variables: &common-env
 
 services:
   # ==========================================
-  # 1. CORE POSTGRES (User, User_Skill, Review)
+  # DATABASES
   # ==========================================
   postgres-core:
     image: postgres:15-alpine
@@ -23,9 +23,6 @@ services:
     networks:
       - microservices-network
 
-  # ==========================================
-  # 2. SCHEDULE POSTGRES
-  # ==========================================
   postgres-schedule:
     image: postgres:15-alpine
     container_name: db-postgres-schedule
@@ -41,9 +38,6 @@ services:
     networks:
       - microservices-network
 
-  # ==========================================
-  # 3. MONGODB
-  # ==========================================
   mongodb-chat:
     image: mongo:6.0
     container_name: db-mongodb-chat
@@ -59,7 +53,7 @@ services:
       - microservices-network
 
   # ==========================================
-  # SERVICES IMPLEMENTATION
+  # API GATEWAY
   # ==========================================
   gateway:
     build: ./services/gateway
@@ -70,16 +64,17 @@ services:
       - ./services/gateway:/app
     environment:
       <<: *common-env
-      USER_SERVICE_URL: http://user:2000
-      CHAT_SERVICE_URL: http://chat:8081
     networks:
       - microservices-network
 
+  # ==========================================
+  # SINGLE INSTANCE SERVICES (Low Traffic / WebSockets)
+  # ==========================================
   user:
     build: 
       context: ./services/user
       dockerfile: Dockerfile
-    container_name: service-user
+    container_name: user
     ports:
       - "2000:2000"
     volumes:
@@ -97,9 +92,27 @@ services:
     networks:
       - microservices-network
 
-  review:
+  chat:
+    build: ./services/chat
+    container_name: chat
+    ports:
+      - "8081:8081"
+    environment:
+      <<: *common-env
+      MONGO_URI: mongodb://admin:password@mongodb-chat:27017/chat_db?authSource=admin
+      DB_URI: postgres://admin:password@postgres-core:5432/core_db
+    depends_on:
+      - mongodb-chat
+      - postgres-core
+    networks:
+      - microservices-network
+
+  # ==========================================
+  # LOAD BALANCED SERVICES (High Traffic)
+  # ==========================================
+  review-1:
     build: ./services/review
-    container_name: service-review
+    container_name: review-1
     command: python -B -m uvicorn main:app --host 0.0.0.0 --port 3001
     ports:
       - "3001:3001"
@@ -114,9 +127,26 @@ services:
     networks:
       - microservices-network
 
-  skill:
+  review-2:
+    build: ./services/review
+    container_name: review-2
+    command: python -B -m uvicorn main:app --host 0.0.0.0 --port 3001
+    ports:
+      - "3011:3001"
+    volumes:
+      - ./services/review:/app
+    environment:
+      <<: *common-env
+      PORT: 3001
+      DB_URI: postgres://admin:password@postgres-core:5432/core_db
+    depends_on:
+      - postgres-core
+    networks:
+      - microservices-network
+
+  skill-1:
     build: ./services/skill
-    container_name: service-skill
+    container_name: skill-1
     ports:
       - "3002:3002"
     volumes:
@@ -131,9 +161,26 @@ services:
     networks:
       - microservices-network
 
-  schedule:
+  skill-2:
+    build: ./services/skill
+    container_name: skill-2
+    ports:
+      - "3012:3002"
+    volumes:
+      - ./services/skill:/app
+      - /app/node_modules
+    environment:
+      <<: *common-env
+      PORT: 3002
+      DB_URI: postgres://admin:password@postgres-core:5432/core_db
+    depends_on:
+      - postgres-core
+    networks:
+      - microservices-network
+
+  schedule-1:
     build: ./services/schedule
-    container_name: service-schedule
+    container_name: schedule-1
     ports:
       - "8000:8000"
     volumes:
@@ -147,20 +194,19 @@ services:
     networks:
       - microservices-network
 
-  chat:
-    build: ./services/chat
-    container_name: service-chat
+  schedule-2:
+    build: ./services/schedule
+    container_name: schedule-2
     ports:
-      - "8081:8081"
-    # volumes:
-    #   - ./services/chat:/app
+      - "8001:8000"
+    volumes:
+      - ./services/schedule:/app
     environment:
       <<: *common-env
-      MONGO_URI: mongodb://admin:password@mongodb-chat:27017/chat_db?authSource=admin
-      DB_URI: postgres://admin:password@postgres-core:5432/core_db
+      PORT: 8000
+      DB_URI: postgres://admin:password@postgres-schedule:5432/schedule_db
     depends_on:
-      - mongodb-chat
-      - postgres-core
+      - postgres-schedule
     networks:
       - microservices-network
 
