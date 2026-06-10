@@ -5,7 +5,6 @@ import { verifyToken } from '../middlewares/authMiddleware.js';
 
 const router: Router = Router();
 
-// Notice how the middleware is applied here!
 router.get('/profile', verifyToken, getUserProfile);
 router.get('/:id', getPublicProfile);
 

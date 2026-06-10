@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -18,8 +20,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// --- CIRCUIT BREAKER ---
-
+// --- 1. CIRCUIT BREAKER ---
 type CircuitBreaker struct {
 	mu               sync.Mutex
 	state            string // "CLOSED", "OPEN", "HALF_OPEN"
@@ -74,8 +75,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 	}
 }
 
-// --- LOAD BALANCER ---
-
+// --- 2. LOAD BALANCER ---
 type Backend struct {
 	URL *url.URL
 	CB  *CircuitBreaker
@@ -92,7 +92,6 @@ func (r *RoundRobinBalancer) NextBackend() *Backend {
 		return nil
 	}
 
-	// Cycle through targets to find a healthy node
 	for i := 0; i < n; i++ {
 		idx := atomic.AddUint32(&r.current, 1) % uint32(n)
 		backend := r.backends[idx]
@@ -101,15 +100,98 @@ func (r *RoundRobinBalancer) NextBackend() *Backend {
 			return backend
 		}
 	}
-	return nil // All backends are tripped open
+	return nil
 }
 
-// --- ROUTING SETUP ---
+// --- 3. RETRY TRANSPORT (INVISIBLE FAILOVER) ---
+type RetryTransport struct {
+	Transport http.RoundTripper
+	Balancer  *RoundRobinBalancer
+}
 
+
+func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var lastErr error
+	var lastResp *http.Response
+
+	maxAttempts := len(t.Balancer.backends)
+	if maxAttempts == 0 {
+		return nil, fmt.Errorf("no backend targets configured")
+	}
+
+	// 1. SAFELY handle request bodies (Crucial fix for GET requests)
+	var bodyBytes []byte
+	var hasBody bool
+	
+	// Only read the body if it actually exists and is not an empty GET request
+	if req.Body != nil && req.Body != http.NoBody {
+		bodyBytes, _ = ioutil.ReadAll(req.Body)
+		req.Body.Close()
+		hasBody = true
+	}
+
+	for i := 0; i < maxAttempts; i++ {
+		backend := t.Balancer.NextBackend()
+		if backend == nil {
+			break // All nodes are down or circuit breakers are OPEN
+		}
+
+		// Clone the request for this specific target
+		attemptReq := req.Clone(req.Context())
+		attemptReq.URL.Scheme = backend.URL.Scheme
+		attemptReq.URL.Host = backend.URL.Host
+		// attemptReq.Host = backend.URL.Host
+
+		// 2. Only re-attach a body stream if the original request actually had one (POST/PUT)
+		if hasBody {
+			attemptReq.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+			attemptReq.GetBody = func() (io.ReadCloser, error) {
+				return ioutil.NopCloser(bytes.NewBuffer(bodyBytes)), nil
+			}
+		} else {
+			// Explicitly enforce that GET requests remain entirely body-less
+			attemptReq.Body = http.NoBody
+			attemptReq.GetBody = func() (io.ReadCloser, error) { return http.NoBody, nil }
+		}
+
+		// Execute the network request
+		resp, err := t.Transport.RoundTrip(attemptReq)
+
+		// Target is totally dead/unreachable
+		if err != nil {
+			log.Printf("[Gateway Retry] Connection to %s failed: %v. Switching...", backend.URL.Host, err)
+			backend.CB.RecordFailure()
+			lastErr = err
+			continue 
+		}
+
+		// Target is online but crashing internally (HTTP 500+)
+		if resp.StatusCode >= 500 {
+			log.Printf("[Gateway Retry] Target %s returned %d. Switching...", backend.URL.Host, resp.StatusCode)
+			backend.CB.RecordFailure()
+			lastResp = resp
+			continue 
+		}
+
+		// Success!
+		backend.CB.RecordSuccess()
+		return resp, nil
+	}
+
+	// If we exhausted all nodes, return the last error generated
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("all circuit breakers tripped open")
+}
+
+// --- 4. ROUTING SETUP ---
 type Route struct {
 	Path        string              `json:"path"`
-	TargetURL   string              `json:"target_url,omitempty"`  // Fallback for single target
-	TargetURLs  []string            `json:"target_urls,omitempty"` // Multiple targets for Load Balancing
+	TargetURLs  []string            `json:"target_urls,omitempty"` 
 	RequireAuth bool                `json:"require_auth"`
 	Balancer    *RoundRobinBalancer `json:"-"`
 }
@@ -147,40 +229,27 @@ func loadRoutes(dir string) error {
 			filePath := filepath.Join(dir, file.Name())
 			jsonData, err := ioutil.ReadFile(filePath)
 			if err != nil {
-				log.Printf("Skipping unreadable route configuration %s: %v", file.Name(), err)
 				continue
 			}
 
 			var config RouteConfig
 			if err := json.Unmarshal(jsonData, &config); err != nil {
-				log.Printf("Skipping malformed route file %s: %v", file.Name(), err)
 				continue
 			}
 
 			for _, route := range config.Routes {
-				var targets []string
-				if len(route.TargetURLs) > 0 {
-					targets = route.TargetURLs
-				} else if route.TargetURL != "" {
-					targets = append(targets, route.TargetURL)
-				}
-
 				balancer := &RoundRobinBalancer{}
-				for _, targetStr := range targets {
-					parsedURL, err := url.Parse(targetStr)
-					if err != nil {
-						log.Printf("Invalid target URL syntax: %s", targetStr)
-						continue
-					}
+				for _, targetStr := range route.TargetURLs {
+					parsedURL, _ := url.Parse(targetStr)
 					balancer.backends = append(balancer.backends, &Backend{
 						URL: parsedURL,
-						CB:  NewCircuitBreaker(3, 10*time.Second), // Trip after 3 fails, 10s cool down
+						CB:  NewCircuitBreaker(3, 10*time.Second),
 					})
 				}
 
 				route.Balancer = balancer
 				routes = append(routes, route)
-				log.Printf("Configured Path Proxy: %s mapped to -> %v", route.Path, targets)
+				log.Printf("Configured Proxy: %s -> %v", route.Path, route.TargetURLs)
 			}
 		}
 	}
@@ -188,7 +257,6 @@ func loadRoutes(dir string) error {
 }
 
 func gatewayHandler(w http.ResponseWriter, r *http.Request) {
-	// Global CORS Rules
 	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization")
@@ -200,9 +268,9 @@ func gatewayHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var matchedRoute *Route
-	for _, route := range routes {
-		if strings.HasPrefix(r.URL.Path, route.Path) {
-			matchedRoute = &route
+	for i := range routes {
+		if strings.HasPrefix(r.URL.Path, routes[i].Path) {
+			matchedRoute = &routes[i]
 			break
 		}
 	}
@@ -222,44 +290,28 @@ func gatewayHandler(w http.ResponseWriter, r *http.Request) {
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		isValid, err := validateToken(tokenString)
 		if err != nil || !isValid {
-			http.Error(w, `{"error":"Unauthorized: Access token has expired or is invalid"}`, http.StatusUnauthorized)
+			http.Error(w, `{"error":"Unauthorized: Access token has expired"}`, http.StatusUnauthorized)
 			return
 		}
 	}
 
-	backend := matchedRoute.Balancer.NextBackend()
-	if backend == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"error":"Service Unavailable","message":"All backend instances are currently unresponsive. Circuit Breaker is OPEN."}`))
-		return
+	// We no longer pull the backend here. We hand it over to the intelligent Reverse Proxy!
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			// Forward correct headers to the backend
+			req.Header.Set("X-Forwarded-Host", req.Host)
+		},
+		Transport: &RetryTransport{
+			Transport: http.DefaultTransport,
+			Balancer:  matchedRoute.Balancer,
+		},
+		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			log.Printf("Gateway Proxy Error: All retries failed - %v", err)
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusServiceUnavailable)
+			rw.Write([]byte(`{"error":"Service Unreachable","message":"All backend instances are currently offline."}`))
+		},
 	}
-
-	proxy := httputil.NewSingleHostReverseProxy(backend.URL)
-
-	// Intercept bad target responses
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		if resp.StatusCode >= 500 {
-			backend.CB.RecordFailure()
-		} else {
-			backend.CB.RecordSuccess()
-		}
-		return nil
-	}
-
-	// Intercept dropped connections / crashed instances
-	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
-		backend.CB.RecordFailure()
-		log.Printf("Proxy Connection Failure to %s: %v", backend.URL.Host, err)
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusServiceUnavailable)
-		rw.Write([]byte(`{"error":"Service Unreachable","message":"The application service instance failed to respond."}`))
-	}
-
-	r.URL.Host = backend.URL.Host
-	r.URL.Scheme = backend.URL.Scheme
-	r.Header.Set("X-Forwarded-Host", r.Header.Get("Host"))
-	r.Host = backend.URL.Host
 
 	proxy.ServeHTTP(w, r)
 }
